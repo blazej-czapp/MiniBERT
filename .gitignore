@@ -1,0 +1,5 @@
+logs/*
+pretrain_data/*
+pretrain_data_small/*
+runs/*
+__pycache__/*
