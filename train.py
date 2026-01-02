@@ -81,18 +81,17 @@ if __name__ == "__main__":
     model = MiniBERT(
         vocab_size=len(tokenizer.get_vocab()),
         max_seq_len=MAX_SEQ_LEN,
-        embed_size=256,
+        embed_size=512,
         hidden_size=1024,
-        n_heads=2,
-        n_layers=2,
+        n_heads=4,
+        n_layers=4,
         device=cuda0,
     )
 
     # The optimizer isn't aware of the loss function at all - the loss updates tensor gradients by itself,
     # the optimizer then steps in and updates parameters appropriately (taking into account things like
     # learning rate, momentum, decay etc.)
-    optimizer = torch.optim.Adam(model.parameters())
-    loss_fn = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
 
     # load training data
 
@@ -104,7 +103,9 @@ if __name__ == "__main__":
     if (last := tokenizer("foo", padding="max_length", max_length=6)["input_ids"][-1]) != PAD_ID:
         raise Exception(f"Unknown [PAD] token ID, expected {PAD_ID}, got {last}")
 
-    tb_writer = SummaryWriter("runs/miniBERT")
+    loss_fn = nn.CrossEntropyLoss(ignore_index=PAD_ID)
+
+    tb_writer = SummaryWriter("runs/embed_512_heads_4_layers_4_lr_00001")
 
     step: int = 0
     for epoch in range(10):
