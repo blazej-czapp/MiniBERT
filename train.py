@@ -133,7 +133,7 @@ if __name__ == "__main__":
 
             # Create a mask for 15% of tokens
             batch_size, seq_len = batch.shape
-            mask_indices = torch.rand(batch_size, seq_len) < TRAIN_MASK_PROB
+            mask = torch.rand(batch_size, seq_len) < TRAIN_MASK_PROB
 
             # Don't mask special tokens (101=[CLS], 102=[SEP], 0=[PAD])
             # 103=[MASK] shouldn't be appearing in tokenized input
@@ -142,11 +142,11 @@ if __name__ == "__main__":
             for i in range(batch_size):
                 for j in range(seq_len):
                     if batch[i, j].item() in special_tokens:
-                        mask_indices[i, j] = False
+                        mask[i, j] = False
 
             for i in range(batch_size):
                 for j in range(seq_len):
-                    if mask_indices[i, j]:
+                    if mask[i, j]:
                         rand_val = random.random()
                         if rand_val < 0.8:  # 80% -> [MASK]
                             batch[i, j] = MASK_ID
@@ -167,11 +167,48 @@ if __name__ == "__main__":
             # masked tokens, and, eventually, all tokens (since a masked token may actually be left unchanged).
             # Passing token IDs, not one-hot vectors as targets - CrossEntropy is aware of this.
             # Gradients are averaged per batch.
-            loss = loss_fn(y[mask_indices], batch_unmasked[mask_indices])
+            loss = loss_fn(y[mask], batch_unmasked[mask])
             loss.backward()
             optimizer.step()
 
+            # ----- Tensorboard -----
+
             tb_writer.add_scalar("Loss", loss.item(), step)
+
+            # could also compute loss per token and plot masked vs unmasked loss to make sure the model is
+            # not cheating with identity (esp. if we change the masking strategy)
+
+            # detect loss spikes with learning rate adjustments, esp. after warmup, and other instabilities
+            tb_writer.add_scalar("LR", optimizer.param_groups[0]["lr"], step)
+
+            # save time and memory by not computing graph updates (even if we discard them in the end by not
+            # calling backward(), graph state is still computed)
+            with torch.no_grad():
+                # compute accuracy of actual predictions - if loss goes down while accuracy stays flat, it
+                # suggests a capacity or representation bottleneck
+                preds = y.argmax(dim=-1)
+                correct = (preds[mask] == batch_unmasked[mask]).float().mean()
+                tb_writer.add_scalar("mlm/accuracy_masked", correct.item(), step)
+
+                # Plot global *gradient* norm:
+                #   - exploding gradient presage loss divergence
+                #   - vanishing norms indicate learning death
+                #   - no long-term upward trend is healthy
+                # using large max_norm so that we're just measuring, not really clipping
+                tb_writer.add_scalar(
+                    "norm/gradient", torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1e9), step
+                )
+
+                # feels like an overkill - gradient norms should corelate here?
+                # param_norm = torch.sqrt(sum(p.norm()**2 for p in model.parameters()))
+                # tb_writer.add_scalar("params/global_norm", param_norm.item(), global_step)
+
+                # log representation scale, observe if it doesn't suddenly collapse, grow indefinitely
+                # (underregularisation) or wildly oscilate
+                # TODO could do the same for attention (difficult to access) and embeddings and, for deeper
+                # stacks, early, mid and late
+                tb_writer.add_scalar("repr/mlp_out_norm_l3", y[mask].norm().item(), step)
+
             step += 1
 
     tb_writer.close()

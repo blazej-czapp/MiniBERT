@@ -16,6 +16,8 @@ class MiniBERT(nn.Module):
         self.embed = nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size, device=device)
         self.pos_embed = nn.Embedding(max_seq_len, embed_size, device=device)
 
+        # TODO reimplementing from scratch would be interesting and we'd be able to monitor e.g. attention
+        # entropy
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_size, nhead=n_heads, dim_feedforward=hidden_size, batch_first=True, device=device
         )
