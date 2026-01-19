@@ -3,6 +3,7 @@
 import os
 import json
 import random
+import signal
 import threading
 import argparse
 import glob
@@ -138,6 +139,7 @@ def init_scheduler(optimizer):
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, handle_sigint)
     cuda0 = torch.device("cuda:0")
 
     dataset = JsonDataset(
@@ -251,6 +253,9 @@ if __name__ == "__main__":
     tb_writer = SummaryWriter(os.path.join("runs", run_name))
 
     for epoch in range(start_epoch, NUM_EPOCHS):
+        if stop_requested.is_set():
+            break
+
         print(f"Epoch: {epoch}")
 
         # if epoch_size is not None then we must have restored from checkpoint so current step is probably
@@ -372,5 +377,10 @@ if __name__ == "__main__":
 
             if step % 1000 == 0:
                 save_checkpoint(model, optimizer, scheduler, epoch, epoch_size, step, run_name)
+
+            if stop_requested.is_set():
+                save_checkpoint(model, optimizer, scheduler, epoch, epoch_size, step, run_name)
+                print("Interrupted. Exiting.")
+                break
 
     tb_writer.close()
