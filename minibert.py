@@ -37,6 +37,7 @@ class MiniBERT(nn.Module):
 
         # Masked Language Model head - once we've trained the underlying semantic model, we'll discard it
         # and add a Named Entity Recognition classifier head instead
+        # TODO see if tying MLM to embeddings lowers loss floor
         self.mlm_head = nn.Linear(embed_size, vocab_size, device=device)
 
         self.device = device
