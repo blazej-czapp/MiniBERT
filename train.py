@@ -23,6 +23,7 @@ from minibert import MiniBERT
 
 PRETRAIN_DATA_DIR = "./pretrain_data"
 MAX_SEQ_LEN = 128
+MAX_STEPS = 120000
 BATCH_SIZE = 32
 NUM_EPOCHS = 20
 TRAIN_MASK_PROB = 0.15
@@ -72,10 +73,10 @@ def save_checkpoint(model, optimizer, scheduler, epoch, epoch_size, step, run_na
     )
 
 
-def load_checkpoint(path):
+def load_checkpoint(path, device):
     checkpoint = torch.load(path, weights_only=True)
 
-    model = init_model()
+    model = init_model(device)
     optimizer = init_optimizer(model)
     scheduler = init_scheduler(optimizer)
 
@@ -113,7 +114,7 @@ def checkpoint_path_for_step(run_name, step):
     return path if os.path.exists(path) else None
 
 
-def init_model():
+def init_model(device):
     return MiniBERT(
         vocab_size=len(tokenizer.get_vocab()),
         max_seq_len=MAX_SEQ_LEN,
@@ -121,7 +122,7 @@ def init_model():
         hidden_size=1024,
         n_heads=4,
         n_layers=4,
-        device=cuda0,
+        device=device,
     )
 
 
@@ -130,17 +131,25 @@ def init_optimizer(model):
 
 
 def init_scheduler(optimizer):
-    switchover = 80000
+    switchover = int(MAX_STEPS * 0.5)
     warmup = LinearLR(optimizer, start_factor=1.0, total_iters=switchover)
-    cosine = CosineAnnealingLR(optimizer, T_max=160000, eta_min=1e-6)
+    cosine = CosineAnnealingLR(optimizer, T_max=MAX_STEPS, eta_min=1e-6)
     # TODO try torch.optim.lr_scheduler.ReduceLROnPlateau
-    scheduler = SequentialLR(optimizer, schedulers=[warmup], milestones=[switchover])
+    scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[switchover])
     return warmup
+
+def seq_len_curriculum(step):
+    if step < 6000:
+        return 64
+    elif step < 12000:
+        return int(MAX_SEQ_LEN * 0.5)
+    else:
+        return MAX_SEQ_LEN
 
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, handle_sigint)
-    cuda0 = torch.device("cuda:0")
+    device = torch.device("cuda:0")
 
     dataset = JsonDataset(
         [os.path.join(PRETRAIN_DATA_DIR, datafile) for datafile in os.listdir(PRETRAIN_DATA_DIR)]
@@ -149,6 +158,7 @@ if __name__ == "__main__":
 
     # cached at ~/.cache/huggingface
     # English by default
+    # TODO replace with a cased tokenizer for NRE
     tokenizer = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased", unk_token="<unk>")
 
     # >>> tokenizer("hello")
@@ -214,7 +224,7 @@ if __name__ == "__main__":
                 sys.exit(1)
 
         restoring_from_checkpoint = True
-        model, optimizer, scheduler, start_epoch, epoch_size, step = load_checkpoint(ck_path)
+        model, optimizer, scheduler, start_epoch, epoch_size, step = load_checkpoint(ck_path, device)
         print(f"Run restored from checkpoint at step {step}, epoch {start_epoch}")
         data_it = iter(dataloader)
 
@@ -224,11 +234,15 @@ if __name__ == "__main__":
         # skip the dataloader iterator to the resumed step in the epoch
         data_it = islice(data_it, skip, None)
     else:
+        if os.path.exists(f"runs/{run_name}"):
+            print("Run data for this name already exists - aborting the run to be safe and avoid accidental overwrite")
+            sys.exit(1)
+
         restoring_from_checkpoint = False
         # ensure the directory exists so checkpoints and tensorboard logs can be written
         os.makedirs(os.path.join("runs", run_name), exist_ok=True)
         # TODO use model.cuda(cuda0) rather than initialising every parameter manually
-        model = init_model()
+        model = init_model(device)
         # The optimizer isn't aware of the loss function at all - the loss updates tensor gradients by itself,
         # the optimizer then steps in and updates parameters appropriately (taking into account things like
         # learning rate, momentum, decay etc.)
@@ -273,15 +287,16 @@ if __name__ == "__main__":
         for text_batch in data_it:
             optimizer.zero_grad()
             # TODO slide a window over long input sequences?
+            seq_len_curriculum(step)
             batch = tokenizer(
                 text_batch,
                 padding="max_length",  # pad everything to the length indicated by max_length argument
                 truncation=True,
-                max_length=MAX_SEQ_LEN,
+                max_length=seq_len_curriculum(step),
                 return_tensors="pt",  # return pytorch tensors rather than python lists (another option is 'np' for numpy)
             )["input_ids"]
 
-            batch = batch.to(cuda0)
+            batch = batch.to(device)
 
             # detach() doesn't actually copy the data but is called first to prevent cloning of gradient data
             batch_unmasked = batch.detach().clone()

@@ -51,7 +51,7 @@ class MiniBERT(nn.Module):
         """
         seq_len = input_seq.size(1)  # batch first
         embeddings = self.embed(input_seq)
-        # normally we'd have rotational encodings or some such
+        # TODO normally we'd have rotational encodings or some such
         pos_embeddings = self.pos_embed(torch.arange(seq_len, device=self.device))
 
         # addition implicitly broadcasted across the batch
